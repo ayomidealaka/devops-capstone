@@ -1,0 +1,168 @@
+version: 2.1
+orbs:
+  aws-eks: circleci/aws-eks@0.2.3
+  kubernetes: circleci/kubernetes@0.12.0
+
+executors:
+  python:
+    docker:
+      - image: circleci/python:3.7.3-stretch
+  aws:
+    docker:
+      - image: amazon/aws-cli
+jobs:
+  lint:
+    executor: python
+    steps:
+      - checkout
+      - run:
+          name: Setup environment and install dependencies
+          command: |
+            make setup
+            make install
+            sudo wget -O /bin/hadolint https://github.com/hadolint/hadolint/releases/download/v1.16.3/hadolint-Linux-x86_64 &&\
+            sudo chmod +x /bin/hadolint
+      - run:
+          name: run lint
+          command: |
+            . venv/bin/activate
+            make lint
+
+  build-docker-image:
+    machine: true
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run: 
+          name: build and push docker image
+          command: |
+            docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}
+            docker build --tag=devops-capstone .
+            docker tag devops-capstone ayoalaka/devops-capstone:1.0
+            docker push ayoalaka/devops-capstone:1.0
+            
+  create-eks-cluster:
+    executor: aws-eks/python3
+    parameters:
+      aws-region:
+        description: |
+          AWS region that the EKS cluster will be created in.
+        type: string      
+      cluster-name:
+        description:  Name of the EKS cluster to be created
+        type: string
+    steps:
+      - checkout
+      - aws-eks/install-aws-iam-authenticator:
+          release-tag: ''
+      - run:
+          name: Install the eksctl tool
+          command: |
+            if which eksctl > /dev/null; then
+            echo "eksctl installed"
+            exit 0
+            fi
+            mkdir -p eksctl_download
+            curl --silent --location --retry 5 "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C eksctl_download
+            chmod +x eksctl_download/eksctl
+            SUDO=""
+            if [ $(id -u) -ne 0 ] && which sudo > /dev/null ; then
+            SUDO="sudo"
+            fi
+            $SUDO mv eksctl_download/eksctl /usr/local/bin/
+            rmdir eksctl_download
+
+      - aws-eks/create-cluster:
+          aws-region: <<parameters.aws-region>>
+          cluster-name: <<parameters.cluster-name>>
+          skip-kubectl-install: false
+          verbose: 3
+          node-type: t2.micro
+          nodes-max: 2
+          ssh-access: false
+          ssh-public-key: ''
+
+  test-cluster:
+    executor: aws-eks/python3
+    parameters:
+      aws-region:
+        description: |
+          AWS region that the EKS cluster will be created in.
+        type: string    
+      cluster-name:
+        description: Name of the EKS cluster to be created
+        type: string
+    steps:
+      - kubernetes/install
+      - aws-eks/update-kubeconfig-with-authenticator:
+          cluster-name: <<parameters.cluster-name>>
+          aws-region: <<parameters.aws-region>>
+      - run:
+          name: Kube cluster
+          command: |
+            kubectl get services
+  create-deployment:
+    executor: aws-eks/python3
+    parameters:
+      aws-region:
+        description: |
+          AWS region that the EKS cluster will be created in.
+        type: string  
+      cluster-name:
+        description: Name of the EKS cluster to be created
+        type: string
+    steps:
+      - checkout
+      - aws-eks/update-kubeconfig-with-authenticator:
+          cluster-name: <<parameters.cluster-name>>
+          aws-region: <<parameters.aws-region>>
+          install-kubectl: true
+      - kubernetes/create-or-update-resource:
+          get-rollout-status: false
+          resource-file-path: deployment.yml
+          resource-name: deployment/devops-capstone
+
+  test-deployment:
+    executor: aws-eks/python3
+    parameters:
+      aws-region:
+        description: |
+          AWS region that the EKS cluster will be created in.
+        type: string  
+      cluster-name:
+        description: Name of the EKS cluster to be created
+        type: string
+    steps:
+      - kubernetes/install
+      - aws-eks/update-kubeconfig-with-authenticator:
+          cluster-name: <<parameters.cluster-name>>
+          aws-region: <<parameters.aws-region>>
+      - run:
+          name: Kube cluster
+          command: |
+            kubectl get nodes
+            kubectl get deployment
+            
+workflows:
+  default:
+    jobs:
+      - lint
+      - build-docker-image:
+          requires:
+            - lint
+      - create-eks-cluster:
+          cluster-name: capstone
+          aws-region: us-west-2
+      - test-cluster: 
+          cluster-name: capstone
+          aws-region: us-west-2
+          requires: 
+            - create-eks-cluster
+      - create-deployment:
+          cluster-name: capstone
+          aws-region: us-west-2
+          requires: [build-docker-image, test-cluster]
+      - test-deployment:
+          cluster-name: capstone
+          aws-region: us-west-2
+          requires: [create-deployment]

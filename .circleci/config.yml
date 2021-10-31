@@ -152,18 +152,18 @@ workflows:
           requires:
             - lint
       - create-eks-cluster:
-          cluster-name: capstone
+          cluster-name: devops-capstone
           aws-region: us-west-2
       - test-cluster: 
-          cluster-name: capstone
+          cluster-name: devops-capstone
           aws-region: us-west-2
           requires: 
             - create-eks-cluster
       - create-deployment:
-          cluster-name: capstone
+          cluster-name: devops-capstone
           aws-region: us-west-2
           requires: [build-docker-image, test-cluster]
       - test-deployment:
-          cluster-name: capstone
+          cluster-name: devops-capstone
           aws-region: us-west-2
           requires: [create-deployment]

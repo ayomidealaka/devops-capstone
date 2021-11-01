@@ -3,6 +3,7 @@
 # Dockerfile should pass hadolint
 # app.py should pass pylint
 
+docker-build: docker build --tag=devops-capstone .
 
 setup:
 	# Create python virtualenv & activate it

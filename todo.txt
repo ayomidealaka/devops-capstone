@@ -1,2 +1,0 @@
-docker username and password
-aws secret keys
